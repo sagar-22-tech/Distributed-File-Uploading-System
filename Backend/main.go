@@ -8,14 +8,31 @@ import (
 	"os"
 
 	"github.com/joho/godotenv"
-	"github.com/rs/cors"
 )
+
+// Foolproof Native CORS Middleware
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Strictly allow your production frontend origin
+		w.Header().Set("Access-Control-Allow-Origin", "https://distributed-file-uploading-system.vercel.app")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+		// Handle preflight requests instantly before hitting any multiplexer routes
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
 
 func main() {
 	mux := http.NewServeMux()
 
 	if err := godotenv.Load(); err != nil {
-
 		log.Println("No .env file found; falling back to system environment variables")
 	}
 
@@ -24,37 +41,18 @@ func main() {
 	mux.HandleFunc("/upload/{fileId}", handlers.UploadChunk)
 	mux.HandleFunc("/upload/{fileId}/complete", handlers.UploadComplete)
 	mux.HandleFunc("/health", handlers.HealthCheck)
-	url := os.Getenv("FRONTEND_URL")
-
-	// Create a slice of allowed origins
-	allowedOrigins := []string{"http://localhost:5173"} // your local dev port (e.g., Vite)
-	if url != "" {
-		allowedOrigins = append(allowedOrigins, url)
-	}
-	// Always allow your production Vercel frontend
-	allowedOrigins = append(allowedOrigins, "https://distributed-file-uploading-system.vercel.app/")
-
-	c := cors.New(cors.Options{
-		AllowedOrigins:   allowedOrigins, // Use the updated slice here
-		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
-		AllowedHeaders:   []string{"Authorization", "Content-Type"},
-		AllowCredentials: true,
-		Debug:            false,
-	})
-
-	handler := c.Handler(mux)
 
 	fmt.Println("Server is running ")
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080" // local fallback
+		port = "8080"
 	}
 
-	// FIX: Ensure the port is prepended with a colon
 	log.Printf("Server is running on port %s", port)
-	err := http.ListenAndServe(":"+port, handler)
+
+	// FIX: Use the native middleware wrapper instead of the external package
+	err := http.ListenAndServe(":"+port, corsMiddleware(mux))
 	if err != nil {
 		log.Fatal("Error starting server: ", err)
 	}
-
 }
