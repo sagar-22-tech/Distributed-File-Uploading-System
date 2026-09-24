@@ -58,13 +58,3 @@ Final File
 * Concurrent HTTP requests
 * Local filesystem storage
 
-## Development Roadmap
-
-* Phase 1 — Basic file upload
-* Phase 2 — Chunked file upload
-* Phase 3 — Concurrent chunk uploads
-* Phase 4 — Multiple storage nodes
-* Phase 5 — Resumable uploads and checksums
-* Phase 6 — Replication and failure recovery
-* Phase 7 — Real-time monitoring
-* Phase 8 — Authentication, permissions, and rate limiting
