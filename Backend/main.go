@@ -13,10 +13,12 @@ import (
 
 func main() {
 	mux := http.NewServeMux()
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
+
+	if err := godotenv.Load(); err != nil {
+
+		log.Println("No .env file found; falling back to system environment variables")
 	}
+
 	mux.HandleFunc("/upload", handlers.Upload)
 	mux.HandleFunc("/upload/init", handlers.UploadInit)
 	mux.HandleFunc("/upload/{fileId}", handlers.UploadChunk)
@@ -38,7 +40,7 @@ func main() {
 	if PORT == "" {
 		PORT = ":8080"
 	}
-	err = http.ListenAndServe(PORT, handler)
+	err := http.ListenAndServe(PORT, handler)
 	if err != nil {
 		log.Fatal("Error:", err)
 	}
