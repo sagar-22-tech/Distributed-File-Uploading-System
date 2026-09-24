@@ -30,6 +30,22 @@ var (
 	mu             sync.RWMutex
 )
 
+func scheduleCleanup(fileID string, delay time.Duration) {
+	time.AfterFunc(delay, func() {
+		targetDir := filepath.Join("./uploads", fileID)
+
+		if err := os.RemoveAll(targetDir); err != nil {
+			log.Printf("[Auto-Cleanup Failed] Could not remove directory %s: %v\n", targetDir, err)
+		} else {
+			log.Printf("[Auto-Cleanup Success] Removed upload directory: %s\n", targetDir)
+		}
+
+		mu.Lock()
+		delete(uploadSessions, fileID)
+		mu.Unlock()
+	})
+}
+
 func HealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Health check passed"))
@@ -38,11 +54,12 @@ func HealthCheck(w http.ResponseWriter, r *http.Request) {
 func Upload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	currTime := time.Now()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	//Handles large file uploads by setting a maximum memory limit for parsing the multipart form data. The limit is set to 32 MB (32 << 20 bytes). If the request body exceeds this limit, an error will be returned. This helps prevent excessive memory usage and potential denial-of-service attacks.
+
 	err := r.ParseMultipartForm(32 << 20)
 	if err != nil {
 		http.Error(w, "Failed to parse form", http.StatusBadRequest)
@@ -50,7 +67,6 @@ func Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.MultipartForm.RemoveAll()
 
-	//Reading file binary stream from body
 	file, metadata, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "Error retrieving the file", http.StatusBadRequest)
@@ -60,18 +76,19 @@ func Upload(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Uploaded File: %+v\n", metadata.Filename)
 
-	//Creating the upload directory if it doesn't exist
-	err = os.MkdirAll("./uploads", os.ModePerm)
+	fileID := uuid.New().String()
+	ext := filepath.Ext(metadata.Filename)
+
+	fileDir := filepath.Join("./uploads", fileID)
+	err = os.MkdirAll(fileDir, os.ModePerm)
 	if err != nil {
 		http.Error(w, "Error creating upload directory", http.StatusInternalServerError)
 		return
 	}
 
-	fileName := uuid.New().String()
-	ext := filepath.Ext(metadata.Filename)
+	scheduleCleanup(fileID, 5*time.Minute)
 
-	//Creating a new file in the upload directory with the same name as the uploaded file
-	dstPath := filepath.Join("./uploads", filepath.Base(fileName)+ext)
+	dstPath := filepath.Join(fileDir, filepath.Base(fileID)+ext)
 	dst, err := os.Create(dstPath)
 	if err != nil {
 		http.Error(w, "Error in storing file", http.StatusInternalServerError)
@@ -79,17 +96,17 @@ func Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer dst.Close()
 
-	//Copying the uploaded files's content to the newly created file
 	_, err = io.Copy(dst, file)
 	if err != nil {
 		http.Error(w, "Error in saving file", http.StatusInternalServerError)
 		return
 	}
+
 	finalTime := time.Since(currTime)
 	w.WriteHeader(http.StatusOK)
 	response := Response{
-		Message:  "File uploaded Successfully",
-		FileId:   fileName,
+		Message:  "File uploaded successfully (will auto-delete in 5 minutes)",
+		FileId:   fileID,
 		FileName: metadata.Filename,
 		Time:     finalTime.String(),
 	}
@@ -127,9 +144,10 @@ func UploadInit(w http.ResponseWriter, r *http.Request) {
 	fileSize := requestData.FileSize
 
 	totalChunks := int((fileSize + ChunkSize - 1) / ChunkSize)
+	fileID := uuid.New().String()
 
 	session := models.UploadSession{
-		FileID:      uuid.New().String(),
+		FileID:      fileID,
 		FileName:    fileName,
 		TotalSize:   fileSize,
 		ChunkSize:   ChunkSize,
@@ -139,6 +157,8 @@ func UploadInit(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	uploadSessions[session.FileID] = session
 	mu.Unlock()
+
+	scheduleCleanup(fileID, 5*time.Minute)
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(session)
@@ -159,7 +179,6 @@ func UploadChunk(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.MultipartForm.RemoveAll()
 
-	// Get file ID and chunk number
 	fileID := r.PathValue("fileId")
 	chunkNoStr := r.URL.Query().Get("chunkNo")
 
@@ -168,30 +187,26 @@ func UploadChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Convert chunk number to integer
 	chunkNo, err := strconv.Atoi(chunkNoStr)
 	if err != nil {
 		http.Error(w, "Invalid chunk number", http.StatusBadRequest)
 		return
 	}
 
-	// Retrieve upload session
 	mu.RLock()
 	session, exists := uploadSessions[fileID]
 	mu.RUnlock()
 
 	if !exists {
-		http.Error(w, "Upload session not found", http.StatusNotFound)
+		http.Error(w, "Upload session not found or expired", http.StatusNotFound)
 		return
 	}
 
-	// Validate chunk number
 	if chunkNo < 0 || chunkNo >= session.TotalChunks {
 		http.Error(w, "Invalid chunk number", http.StatusBadRequest)
 		return
 	}
 
-	// Get chunk file
 	chunk, handler, err := r.FormFile("chunk")
 	if err != nil {
 		http.Error(w, "Chunk is required", http.StatusBadRequest)
@@ -199,14 +214,11 @@ func UploadChunk(w http.ResponseWriter, r *http.Request) {
 	}
 	defer chunk.Close()
 
-	// Every chunk can be smaller than ChunkSize,
-	// but cannot exceed ChunkSize.
 	if handler.Size <= 0 || handler.Size > session.ChunkSize {
 		http.Error(w, "Invalid chunk size", http.StatusBadRequest)
 		return
 	}
 
-	// Create directory for this upload
 	chunkDir := filepath.Join("./uploads", fileID, "chunks")
 
 	err = os.MkdirAll(chunkDir, os.ModePerm)
@@ -219,19 +231,16 @@ func UploadChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store chunk using its chunk number
 	chunkPath := filepath.Join(
 		chunkDir,
 		fmt.Sprintf("chunk-%d", chunkNo),
 	)
 
-	// Don't overwrite an already uploaded chunk
 	if _, err := os.Stat(chunkPath); err == nil {
 		http.Error(w, "Chunk already uploaded", http.StatusConflict)
 		return
 	}
 
-	// Create chunk file
 	dst, err := os.Create(chunkPath)
 	if err != nil {
 		http.Error(
@@ -242,7 +251,6 @@ func UploadChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Copy chunk data to disk
 	written, err := io.Copy(dst, chunk)
 	if err != nil {
 		dst.Close()
@@ -256,7 +264,6 @@ func UploadChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Close file
 	err = dst.Close()
 	if err != nil {
 		os.Remove(chunkPath)
@@ -269,7 +276,6 @@ func UploadChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate actual bytes written
 	if written != handler.Size {
 		os.Remove(chunkPath)
 
@@ -300,7 +306,6 @@ func UploadComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get file ID from URL
 	fileID := r.PathValue("fileId")
 
 	if fileID == "" {
@@ -308,19 +313,17 @@ func UploadComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Retrieve upload session
 	mu.RLock()
 	session, exists := uploadSessions[fileID]
 	mu.RUnlock()
 
 	if !exists {
-		http.Error(w, "Upload session not found", http.StatusNotFound)
+		http.Error(w, "Upload session not found or expired", http.StatusNotFound)
 		return
 	}
 
 	chunkDir := filepath.Join("./uploads", fileID, "chunks")
 
-	// Check that every chunk exists
 	for i := 0; i < session.TotalChunks; i++ {
 		chunkPath := filepath.Join(
 			chunkDir,
@@ -347,9 +350,6 @@ func UploadComplete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Every chunk must be:
-		// > 0 bytes
-		// <= configured chunk size
 		if info.Size() <= 0 || info.Size() > session.ChunkSize {
 			http.Error(
 				w,
@@ -360,7 +360,6 @@ func UploadComplete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Create final file path
 	fileName := filepath.Base(session.FileName)
 
 	finalPath := filepath.Join(
@@ -369,7 +368,6 @@ func UploadComplete(w http.ResponseWriter, r *http.Request) {
 		fileName,
 	)
 
-	// Don't overwrite an existing final file
 	if _, err := os.Stat(finalPath); err == nil {
 		http.Error(
 			w,
@@ -379,7 +377,6 @@ func UploadComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create final file
 	finalFile, err := os.Create(finalPath)
 
 	if err != nil {
@@ -393,7 +390,6 @@ func UploadComplete(w http.ResponseWriter, r *http.Request) {
 
 	var totalWritten int64
 
-	// Read chunks sequentially
 	for i := 0; i < session.TotalChunks; i++ {
 		chunkPath := filepath.Join(
 			chunkDir,
@@ -433,7 +429,6 @@ func UploadComplete(w http.ResponseWriter, r *http.Request) {
 		totalWritten += written
 	}
 
-	// Verify reconstructed file size
 	if totalWritten != session.TotalSize {
 		finalFile.Close()
 		os.Remove(finalPath)
@@ -446,7 +441,6 @@ func UploadComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Close final file
 	if err := finalFile.Close(); err != nil {
 		os.Remove(finalPath)
 
@@ -458,7 +452,6 @@ func UploadComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Remove chunks after successful reconstruction
 	if err := os.RemoveAll(chunkDir); err != nil {
 		http.Error(
 			w,
@@ -468,13 +461,8 @@ func UploadComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Remove completed upload session from memory
-	mu.Lock()
-	delete(uploadSessions, fileID)
-	mu.Unlock()
-
 	response := map[string]interface{}{
-		"message":  "File uploaded successfully",
+		"message":  "File uploaded successfully (will auto-delete in 5 minutes)",
 		"fileId":   fileID,
 		"fileName": fileName,
 		"size":     totalWritten,
