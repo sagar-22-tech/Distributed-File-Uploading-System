@@ -1,5 +1,5 @@
 node_modules
-go.mod
+
 go.sum
 uploads
 .env
