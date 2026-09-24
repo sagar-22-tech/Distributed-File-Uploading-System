@@ -25,8 +25,17 @@ func main() {
 	mux.HandleFunc("/upload/{fileId}/complete", handlers.UploadComplete)
 	mux.HandleFunc("/health", handlers.HealthCheck)
 	url := os.Getenv("FRONTEND_URL")
+
+	// Create a slice of allowed origins
+	allowedOrigins := []string{"http://localhost:5173"} // your local dev port (e.g., Vite)
+	if url != "" {
+		allowedOrigins = append(allowedOrigins, url)
+	}
+	// Always allow your production Vercel frontend
+	allowedOrigins = append(allowedOrigins, "https://distributed-file-uploading-system.vercel.app/")
+
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{url},
+		AllowedOrigins:   allowedOrigins, // Use the updated slice here
 		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
 		AllowedHeaders:   []string{"Authorization", "Content-Type"},
 		AllowCredentials: true,
