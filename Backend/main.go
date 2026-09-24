@@ -36,12 +36,16 @@ func main() {
 	handler := c.Handler(mux)
 
 	fmt.Println("Server is running ")
-	PORT := os.Getenv("PORT")
-	if PORT == "" {
-		PORT = ":8080"
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // local fallback
 	}
-	err := http.ListenAndServe(PORT, handler)
+
+	// FIX: Ensure the port is prepended with a colon
+	log.Printf("Server is running on port %s", port)
+	err := http.ListenAndServe(":"+port, handler)
 	if err != nil {
-		log.Fatal("Error:", err)
+		log.Fatal("Error starting server: ", err)
 	}
+
 }
