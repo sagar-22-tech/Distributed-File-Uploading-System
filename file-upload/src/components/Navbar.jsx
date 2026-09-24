@@ -7,7 +7,8 @@ const Navbar = () => {
     const checkServerStatus = async () => {
       try {
         // Replace with your actual Go server endpoint
-        const response = await fetch("http://localhost:8080/health");
+        const url = import.meta.env.VITE_API_URL;
+        const response = await fetch(`${url}/health`);
 
         if (response.ok) {
           setStatus("ready");

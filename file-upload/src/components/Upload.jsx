@@ -40,7 +40,8 @@ const Upload = () => {
       };
 
       try {
-        const response = await fetch("http://localhost:8080/upload/init", {
+        const url = import.meta.env.VITE_API_URL;
+        const response = await fetch(`${url}/upload/init`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -65,7 +66,7 @@ const Upload = () => {
 
     uploadFile();
   }, [file]);
-
+  
   const handleChunkAndUpload = async () => {
     if (!file || !fileResponse) {
       alert("Please select a file and wait for server initialization.");
@@ -79,6 +80,7 @@ const Upload = () => {
     let start = 0;
     let chunkIdx = 0;
     const startTime = performance.now();
+    const url = import.meta.env.VITE_API_URL;
 
     try {
       while (start < file.size) {
@@ -93,7 +95,7 @@ const Upload = () => {
         );
 
         const response = await fetch(
-          `http://localhost:8080/upload/${fileResponse.FileID}?chunkNo=${chunkIdx}`, 
+          `${url}/upload/${fileResponse.FileID}?chunkNo=${chunkIdx}`, 
           {
             method: "POST",
             body: formData,
@@ -115,7 +117,7 @@ const Upload = () => {
       setUploadStatus("All chunks uploaded! Finalizing file on server...");
       
       const completeResponse = await fetch(
-        `http://localhost:8080/upload/${fileResponse.FileID}/complete`,
+        `${url}/upload/${fileResponse.FileID}/complete`,
         {
           method: "POST",
           headers: {
